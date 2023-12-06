@@ -3,6 +3,8 @@ using AuctionService.DTOs;
 using AuctionService.Entities;
 using AutoMapper;
 using AutoMapper.QueryableExtensions;
+using Contracts;
+using MassTransit;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -12,52 +14,63 @@ namespace AuctionService.Controller;
 [Route("api/auctions")]
 public class AuctionController : ControllerBase
 {
-    private readonly AuctionDbContext context;
-    private readonly IMapper mapper;
+    private readonly AuctionDbContext _context;
+    private readonly IMapper _mapper;
+    private readonly IPublishEndpoint _publishEndpoint;
 
-    public AuctionController(AuctionDbContext context, IMapper mapper)
+    public AuctionController(AuctionDbContext context, IMapper mapper,IPublishEndpoint publishEndpoint)
 {
-        this.context = context;
-        this.mapper = mapper;
+        _context = context;
+        _mapper = mapper;
+        _publishEndpoint = publishEndpoint;
     }
 [HttpGet]
 public async Task<ActionResult<List<AuctionDTO>>> GetAllActions(string date)
 {
 
-    var query = context.Auctions.OrderBy(x=>x.Item.Make).AsQueryable();
+    var query = _context.Auctions.OrderBy(x=>x.Item.Make).AsQueryable();
 
     if(!string.IsNullOrEmpty(date)){
         query = query.Where(x=>x.UpdateAt.CompareTo(DateTime.Parse(date).ToUniversalTime()) > 0);
     }
 
-return await query.ProjectTo<AuctionDTO>(mapper.ConfigurationProvider).ToListAsync();
+return await query.ProjectTo<AuctionDTO>(_mapper.ConfigurationProvider).ToListAsync();
 }
 [HttpGet("{id}")]
 public async Task<ActionResult<AuctionDTO>> GetAuctionById(Guid id)
 {
-    var auction= await context.Auctions
+    var auction= await _context.Auctions
     .Include(x=>x.Item)
     .FirstOrDefaultAsync(x=>x.Id==id);
 
     if(auction==null) return NotFound();
 
-    return mapper.Map<AuctionDTO>(auction);
+    return _mapper.Map<AuctionDTO>(auction);
 }
 [HttpPost]
 public async Task<ActionResult<AuctionDTO>> CreateAuction(CreateAuctionDto auctionDto)
 {
-var auction=mapper.Map<Auction>(auctionDto);
+var auction=_mapper.Map<Auction>(auctionDto);
+
 auction.Seller="test";
-context.Auctions.Add(auction);
-var result = await context.SaveChangesAsync() > 0;
+
+_context.Auctions.Add(auction);
+
+var newAuction = _mapper.Map<AuctionDTO>(auction) ;
+
+await _publishEndpoint.Publish(_mapper.Map<AuctionCreated>(newAuction)); 
+
+var result = await _context.SaveChangesAsync() > 0;
+
+
 if(!result) return BadRequest("Could not save changes to thr DB");
 
-return CreatedAtAction(nameof(GetAuctionById),new {auction.Id},mapper.Map<AuctionDTO>(auction));
+return CreatedAtAction(nameof(GetAuctionById),new {auction.Id}, newAuction);
 }
 
 [HttpPut("{id}")]
 public async Task<ActionResult> UpdateAuction(Guid id, UpdateAuctionDto auctionDto){
-    var auction = await context.Auctions
+    var auction = await _context.Auctions
     .Include(x=>x.Item)
     .FirstOrDefaultAsync(x=>x.Id==id);
 
@@ -69,7 +82,9 @@ public async Task<ActionResult> UpdateAuction(Guid id, UpdateAuctionDto auctionD
     auction.Item.Mileage=auctionDto.Mileage ?? auction.Item.Mileage;
     auction.Item.Year=auctionDto.Year ?? auction.Item.Year;
 
-    var result = await context.SaveChangesAsync() > 0;
+    await _publishEndpoint.Publish(_mapper.Map<AuctionUpdated>(auction));
+
+    var result = await _context.SaveChangesAsync() > 0;
 
     if(result) return Ok();
 
@@ -80,14 +95,16 @@ public async Task<ActionResult> UpdateAuction(Guid id, UpdateAuctionDto auctionD
 
 public async Task<ActionResult> DeleteAuction(Guid id)
 {
-var auction = await context.Auctions.FindAsync(id);
+var auction = await _context.Auctions.FindAsync(id);
 if (auction == null)return NotFound();
 
-context.Auctions.Remove(auction);
+_context.Auctions.Remove(auction);
 
-var result=await context.SaveChangesAsync()>0;
+await _publishEndpoint.Publish<AuctionDeleted>(new { Id = auction.Id.ToString()});
 
-if(result)return Ok();
-return BadRequest("Could not update DB");
+var result=await _context.SaveChangesAsync()>0;
+
+if(!result)return BadRequest("Could not update DB");
+return Ok();
 }
 }

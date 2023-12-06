@@ -10,7 +10,7 @@ public int SoldAmount { get; set; }
 public int CurrentHighBid  { get; set; }
 public DateTime CeatedAt { get; set; }
 public DateTime UpdateAt { get; set; }
-public DateTime AuctionEnd { get; set; }
+public DateTime AuctioNEnd { get; set; }
 public string Status { get; set; }
 public string Make { get; set; }
 public string Model { get; set; }
